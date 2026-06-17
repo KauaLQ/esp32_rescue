@@ -77,7 +77,7 @@ void setup() {
   }
   // drop down frame size for higher initial frame rate
   if (config.pixel_format == PIXFORMAT_JPEG) {
-    s->set_framesize(s, FRAMESIZE_VGA);
+    s->set_framesize(s, FRAMESIZE_HVGA);
   }
 
 // Setup LED FLash if LED pin is defined in camera_pins.h

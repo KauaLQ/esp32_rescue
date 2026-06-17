@@ -2,9 +2,10 @@ import cv2
 from ultralytics import YOLO
 import socket
 import numpy as np
+import time
 
 # --- Configuração do ESP de Controle PID ---
-ESP32_IP = "192.168.1.104"
+ESP32_IP = "192.168.1.105"
 ESP32_PORT = 4210
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -18,7 +19,17 @@ if not cap.isOpened():
 model = YOLO("yolov8n.pt")
 tracked_id = None
 
+# --- Variáveis para otimização e FPS ---
+frame_count = 0
+last_results = None
+fps_suave = 0.0  # Inicializa o FPS estabilizado
+alpha = 0.1      # Fator de suavização (quanto menor, mais suave fica o contador)
+
 while True:
+    frame_inicio = time.time() # para cálculo de FPS
+    
+    for _ in range(2):
+        cap.grab()
     success, img = cap.read()
 
     if not success or img is None:
@@ -29,8 +40,22 @@ while True:
     centerY = hs // 2
 
     # --- Byte Track para detecção e rastreamento de pessoas por id ---
-    results = model.track(img, persist=True, tracker="bytetrack.yaml", verbose=False)
+    frame_count += 1
+    if frame_count % 3 == 0 or last_results is None:
+        last_results = list(model.track(img, persist=True, tracker="bytetrack.yaml", verbose=False, stream=True))
+    
+    results = last_results
     persons = []
+
+    # --- Cálculo de FPS Suave e Seguro ---
+    tempo_decorrido = time.time() - frame_inicio
+    if tempo_decorrido > 0:  # Evita o ZeroDivisionError
+        fps_instantaneo = 1 / tempo_decorrido
+        # Aplica a média móvel exponencial
+        if fps_suave == 0.0:
+            fps_suave = fps_instantaneo  # Primeiro frame define o valor inicial
+        else:
+            fps_suave = (alpha * fps_instantaneo) + ((1 - alpha) * fps_suave)
 
     # --- Processa resultados para extrair pessoas e seus ids ---
     for r in results:
@@ -61,22 +86,12 @@ while True:
     # --- Escolhe o alvo a ser rastreado ---
     target = None
     if persons:
-        # ainda não existe alvo
         if tracked_id is None:
             target = max(persons, key=lambda p: p["area"])
             tracked_id = target["id"]
-
         else:
-            # tenta achar a pessoa já rastreada
-            target = next(
-                (
-                    p for p in persons
-                    if p["id"] == tracked_id
-                ),
-                None
-            )
+            target = next((p for p in persons if p["id"] == tracked_id), None)
 
-            # perdeu o alvo
             if target is None:
                 tracked_id = None
                 target = max(persons, key=lambda p: p["area"])
@@ -93,7 +108,7 @@ while True:
         erroX = fx - centerX
         erroY = fy - centerY
 
-        message = (f"{erroX}," f"{erroY}," f"{altura}," f"{tracked_id}")
+        message = f"{erroX},{erroY},{altura},{tracked_id}"
         sock.sendto(message.encode(), (ESP32_IP, ESP32_PORT))
 
         # --- Visualização do alvo e informações ---
@@ -105,10 +120,12 @@ while True:
         cv2.putText(img, "ALVO RASTREADO", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         cv2.putText(img, f"ErroX: {erroX}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         cv2.putText(img, f"ErroY: {erroY}", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        cv2.putText(img, f"FPS: {fps_suave:.1f}", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
     else:
         tracked_id = None
         cv2.putText(img, "SEM ALVO", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        cv2.putText(img, f"FPS: {fps_suave:.1f}", (20, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
     # --- Desenho de cruz central para referência ---
     cv2.circle(img, (centerX, centerY), 15, (255, 0, 255), 2)
