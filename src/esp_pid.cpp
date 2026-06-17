@@ -185,20 +185,25 @@ void loop() {
         bool servoTravouEsquerda =
             posX <= (SERVO_LEFT_LIMIT + 3);
 
-        if (servoTravouDireita && errorX < -20)
-        {
+        float recenterGain = 0.03;
+
+        if (servoTravouDireita && errorX < -20) {
             int pwm = abs(errorX) * 0.2;
             pwm = constrain(pwm, 50, 120);
             giraDireita(pwm);
+            posX -= abs(errorX) * recenterGain;
+            posX = constrain(posX, SERVO_LEFT_LIMIT, SERVO_RIGHT_LIMIT);
+            servoX.write(posX);
         }
-        else if (servoTravouEsquerda && errorX > 20)
-        {
+        else if (servoTravouEsquerda && errorX > 20) {
             int pwm = abs(errorX) * 0.2;
             pwm = constrain(pwm, 50, 120);
             giraEsquerda(pwm);
+            posX += abs(errorX) * recenterGain;
+            posX = constrain(posX, SERVO_LEFT_LIMIT, SERVO_RIGHT_LIMIT);
+            servoX.write(posX);
         }
-        else
-        {
+        else {
             pararMotores();
         }
     }
