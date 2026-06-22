@@ -5,7 +5,7 @@ import numpy as np
 import time
 
 # --- Configuração do ESP de Controle PID ---
-ESP32_IP = "192.168.1.105"
+ESP32_IP = "10.80.0.131"
 ESP32_PORT = 4210
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -102,13 +102,13 @@ while True:
         x1, y1, x2, y2 = target["bbox"]
 
         fx = (x1 + x2) // 2
-        fy = (y1 + y2) // 2
+        fy = y1 + int((y2 - y1) * 0.20)
 
-        altura = y2 - y1
+        area = (x2 - x1) * (y2 - y1)
         erroX = fx - centerX
         erroY = fy - centerY
 
-        message = f"{erroX},{erroY},{altura},{tracked_id}"
+        message = f"{erroX},{erroY},{area},{tracked_id}"
         sock.sendto(message.encode(), (ESP32_IP, ESP32_PORT))
 
         # --- Visualização do alvo e informações ---
@@ -116,7 +116,7 @@ while True:
         cv2.circle(img, (fx, fy), 6, (0, 0, 255), -1)
         cv2.line(img, (centerX, centerY), (fx, fy), (255, 0, 0), 2)
         cv2.putText(img, f"ID: {tracked_id}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        cv2.putText(img, f"H: {altura}px", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(img, f"A: {area}px", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         cv2.putText(img, "ALVO RASTREADO", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         cv2.putText(img, f"ErroX: {erroX}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         cv2.putText(img, f"ErroY: {erroY}", (20, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)

@@ -9,8 +9,8 @@
 #include "motor_cmd.h"
 #include "env.h" // Lembre-se de criar seu próprio arquivo env.h se for usar o bot do Telegram, ou de substituir as variáveis botToken e chatId pelos seus valores reais.
 
-const char* ssid = "CLEUDO";
-const char* password = "91898487";
+const char* ssid = "IFCE-PECEM-ADM";
+const char* password = "IFCE&pecem";
 
 AsyncWebServer server(80);
 WiFiUDP udp;
@@ -27,6 +27,8 @@ float posX = 60;
 float posY = 60;
 const int SERVO_RIGHT_LIMIT = 170;
 const int SERVO_LEFT_LIMIT  = 10;
+const float AREA_SETPOINT = 40000;
+const float AREA_DEADBAND = 5000;
 
 // --- Parâmetros PID ---
 volatile float KpX = 0.01;
@@ -43,7 +45,7 @@ float errorY = 0;
 float previousErrorY = 0;
 float integralY = 0;
 
-float targetHeight = 0;
+float targetArea = 0;
 int targetId = -1;
 unsigned long previousTime = 0;
 unsigned long lastPacketTime = 0;
@@ -141,7 +143,7 @@ void loop() {
             incomingPacket[len] = 0;
         }
 
-        sscanf(incomingPacket, "%f,%f,%f,%d", &errorX, &errorY, &targetHeight, &targetId);
+        sscanf(incomingPacket, "%f,%f,%f,%d", &errorX, &errorY, &targetArea, &targetId);
         if (abs(errorX) < 15) errorX = 0;
         if (abs(errorY) < 15) errorY = 0;
 
@@ -205,6 +207,26 @@ void loop() {
         }
         else {
             pararMotores();
+        }
+
+        // --------------------------------------------------
+        // CONTROLE DA BASE (Frente e Ré) baseado na área do alvo
+        // --------------------------------------------------
+        float areaError = AREA_SETPOINT - targetArea;
+
+        if (abs(areaError) < AREA_DEADBAND)
+        {
+            pararMotores();
+        }
+        else if (areaError > 0) {
+            int pwm = abs(areaError) * 0.2;
+            pwm = constrain(pwm, 50, 120);
+            frente(pwm);
+        }
+        else {
+            int pwm = abs(areaError) * 0.2;
+            pwm = constrain(pwm, 50, 120);
+            re(pwm);
         }
     }
 }
