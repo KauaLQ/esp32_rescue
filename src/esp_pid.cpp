@@ -47,9 +47,9 @@ float integralY = 0;
 
 // --- PID do eixo de área (avanço/recuo da base) ---
 // Kp pequeno porque o erro de área é em px² (pode ser milhares).
-volatile float KpArea = 0.004;
+volatile float KpArea = 0.008;
 volatile float KiArea = 0.0000;
-volatile float KdArea = 0.001;
+volatile float KdArea = 0.003;
 float previousAreaError = 0;
 float integralArea = 0;
 const float AREA_PWM_MAX = 150; // mesmo limite que usa no constrain
