@@ -27,5 +27,6 @@ void frente(int pwm = MOTOR_SPEED);
 void re(int pwm = MOTOR_SPEED);
 void giraDireita(int pwm = MOTOR_SPEED);
 void giraEsquerda(int pwm = MOTOR_SPEED);
+void setMotorPWM(int motor, int pwmA, int pwmB);
 
 #endif
