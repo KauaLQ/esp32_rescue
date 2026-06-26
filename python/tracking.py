@@ -6,7 +6,7 @@ import time
 import threading
 
 # --- Configuração do ESP de Controle PID ---
-ESP32_IP = "192.168.1.101"
+ESP32_IP = "192.168.1.104"
 ESP32_PORT = 4210
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -141,7 +141,7 @@ try:
             x1, y1, x2, y2 = target["bbox"]
 
             fx = (x1 + x2) // 2
-            fy = y1 + int((y2 - y1) * 0.20)
+            fy = y1 + int((y2 - y1) * 0.35)
 
             area = (x2 - x1) * (y2 - y1)
             erroX = fx - centerX
