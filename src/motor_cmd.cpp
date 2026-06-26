@@ -54,3 +54,18 @@ void giraEsquerda(int pwm) {
     ledcWrite(CH_IN3, pwm);
     ledcWrite(CH_IN4, 0);
 }
+
+void setMotorPWM(int motor, int pwmA, int pwmB) {
+    switch (motor) {
+        case 1:
+            ledcWrite(CH_IN1, pwmA);
+            ledcWrite(CH_IN2, pwmB);
+            break;
+        case 2:
+            ledcWrite(CH_IN3, pwmA);
+            ledcWrite(CH_IN4, pwmB);
+            break;
+        default:
+            break;
+    }
+}
