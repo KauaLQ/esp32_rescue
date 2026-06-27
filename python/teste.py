@@ -1,3 +1,5 @@
+# arquivo de teste para a câmera ESP32-CAM
+# Não utilizado no projeto final, apenas para testes rápidos 
 import cv2
 import time
 

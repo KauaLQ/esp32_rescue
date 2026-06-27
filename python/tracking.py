@@ -1,3 +1,5 @@
+# arquivo original de tracking, sem GUI, apenas para testes rápidos
+# não utilizado no projeto final, apenas para testes rápidos
 import cv2
 from ultralytics import YOLO
 import socket
