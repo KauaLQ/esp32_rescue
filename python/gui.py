@@ -28,6 +28,8 @@ nunca espera a GUI.
 import socket
 import threading
 import time
+import sys
+import os
 import tkinter as tk
 from tkinter import ttk
 import cv2
@@ -35,19 +37,44 @@ import numpy as np
 from PIL import Image, ImageTk
 from ultralytics import YOLO
 
-# -----------------------------------------------------------
+# ------------------------------------------------------------
 # CONFIGURAÇÃO PADRÃO (pode ser alterada na própria interface)
-# -----------------------------------------------------------
-DEFAULT_ESP32_IP = "192.168.1.104"
+# ------------------------------------------------------------
+DEFAULT_ESP32_IP = "192.168.1.106"
 DEFAULT_ESP32_PORT = 4210
 DEFAULT_STREAM_URL = "http://esp32cam.local:81/stream"
+
 CAM_DISPLAY_W = 640
 CAM_DISPLAY_H = 480
 GUI_REFRESH_MS = 33  # ~30 FPS para o display (a thread de tracking roda livre, independente disso)
 
-# -----------------------------------------------------------
+# Variáveis de PID enviadas ao ESP32 via UDP (pacote "CFG,...").
+# Tupla = (chave usada no protocolo / igual ao firmware, rótulo exibido na GUI, valor padrão)
+PID_VARS = [
+    ("kpx", "KpX", "0.01"),
+    ("kix", "KiX", "0.000"),
+    ("kdx", "KdX", "0.000"),
+    ("kpy", "KpY", "0.02"),
+    ("kiy", "KiY", "0.000"),
+    ("kdy", "KdY", "0.000"),
+    ("kparea", "KpArea", "0.008"),
+    ("kiarea", "KiArea", "0.0000"),
+    ("kdarea", "KdArea", "0.003"),
+    ("gcompensa", "GanhoCompensaServo", "0.05"),
+]
+
+def resource_path(relative_path):
+    """ Obtém o caminho absoluto para o recurso, funciona para dev e para PyInstaller """
+    try:
+        # PyInstaller cria uma pasta temporária e armazena o caminho em _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# ------------------------------------------------------------
 # THREAD DE CAPTURA
-# -----------------------------------------------------------
+# ------------------------------------------------------------
 class CameraStream:
     def __init__(self, src):
         self.src = src
@@ -96,9 +123,9 @@ class CameraStream:
             self.cap.release()
 
 
-# -----------------------------------------------------------
+# ------------------------------------------------------------
 # THREAD DE PROCESSAMENTO - YOLO + ByteTrack + envio UDP
-# -----------------------------------------------------------
+# ------------------------------------------------------------
 class TrackerWorker:
     def __init__(self, cam: CameraStream, get_esp_target, log_callback):
         self.cam = cam
@@ -125,8 +152,10 @@ class TrackerWorker:
         self.stats_lock = threading.Lock()
         self.stats = {"erroX": 0, "erroY": 0, "area": 0, "id": None, "fps": 0.0, "alvo": False}
 
-    def load_model(self, weights_path="yolov8n.pt"):
-        self.model = YOLO(weights_path)
+    def load_model(self, weights_path="python/yolov8n.pt"):
+        # Garante que o caminho funcione em desenvolvimento e no PyInstaller
+        caminho_absoluto = resource_path(weights_path)
+        self.model = YOLO(caminho_absoluto)
 
     def start(self):
         if self.model is None:
@@ -266,19 +295,26 @@ class TrackerWorker:
             self.log_callback("erro", f"Thread de tracking parou: {e}")
 
 
-# -----------------------------------------------------------
-# INTERFACE GRÁFICA - estilo "tabela"
-# -----------------------------------------------------------
+# ------------------------------------------------------------
+# INTERFACE GRÁFICA
+# ------------------------------------------------------------
 class RescueTrackerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Rescue Tracker | ESP32-CAM Controller")
+        self.root.iconbitmap(resource_path("python/logo_if.ico"))
         self.root.geometry("1000x720")
         self.root.minsize(900, 650)
 
         self.cam = None
         self.worker = None
         self.connected = False
+
+        # Socket dedicado ao envio de configuração PID — separado do socket
+        # de tracking (que só existe dentro do TrackerWorker, criado ao
+        # conectar). Assim, dá para enviar configuração mesmo se a câmera
+        # ainda não estiver conectada.
+        self._cfg_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         self._build_layout()
 
@@ -303,7 +339,7 @@ class RescueTrackerApp:
         )
         self.cam_label.pack(fill="both", expand=True, padx=4, pady=4)
 
-        # --- Painel lateral: tabela de configuração ---
+        # --- Painel lateral: tabela de configuração (estilo CONAN) ---
         side_frame = tk.Frame(top_frame, width=340)
         side_frame.pack(side="right", fill="y")
 
@@ -314,7 +350,7 @@ class RescueTrackerApp:
         self._add_row(config_table, 1, "Porta UDP:", default=str(DEFAULT_ESP32_PORT), attr="port_entry")
         self._add_row(config_table, 2, "Stream URL:", default=DEFAULT_STREAM_URL, attr="stream_entry")
 
-        # Botão Conectar / Desconectar
+        # Botão Conectar / Desconectar (linha cheia, como o "Conectar" do CONAN)
         self.connect_btn = tk.Button(
             config_table, text="Conectar", bg="#90EE90",
             command=self.toggle_connection,
@@ -323,21 +359,34 @@ class RescueTrackerApp:
         config_table.grid_columnconfigure(0, weight=0)
         config_table.grid_columnconfigure(1, weight=1)
 
-        # --- Tabela de variáveis a enviar para o ESP (genéricas, expansível) ---
-        vars_frame = tk.LabelFrame(side_frame, text="Variáveis para o ESP32 (futuro)")
+        # --- Tabela de variáveis PID enviadas ao ESP32 via UDP ---
+        vars_frame = tk.LabelFrame(side_frame, text="Variáveis PID (ESP32)")
         vars_frame.pack(fill="x", pady=(0, 8))
 
-        self.var_rows = []  # cada item: (nome_entry, valor_entry)
         self.vars_table = tk.Frame(vars_frame)
         self.vars_table.pack(fill="x", padx=4, pady=4)
 
-        for _ in range(4):
-            self._add_var_row()
+        # self.pid_entries: chave do protocolo -> Entry correspondente
+        self.pid_entries = {}
+        for row_idx, (chave, rotulo, valor_padrao) in enumerate(PID_VARS):
+            tk.Label(self.vars_table, text=rotulo, anchor="w", width=18).grid(
+                row=row_idx, column=0, padx=2, pady=1, sticky="w"
+            )
+            entry = tk.Entry(self.vars_table, width=10)
+            entry.insert(0, valor_padrao)
+            entry.grid(row=row_idx, column=1, padx=2, pady=1, sticky="we")
+            self.pid_entries[chave] = entry
+
+        self.vars_table.grid_columnconfigure(1, weight=1)
 
         btns_frame = tk.Frame(vars_frame)
         btns_frame.pack(fill="x", padx=4, pady=(0, 4))
-        tk.Button(btns_frame, text="+ Variável", command=self._add_var_row).pack(side="left", expand=True, fill="x", padx=2)
-        tk.Button(btns_frame, text="Enviar Variáveis", bg="#ADD8E6", command=self.send_variables).pack(side="left", expand=True, fill="x", padx=2)
+        tk.Button(
+            btns_frame, text="Restaurar Padrões", bg="#E6ADAD", command=self._restore_pid_defaults
+        ).pack(side="left", expand=True, fill="x", padx=2)
+        tk.Button(
+            btns_frame, text="Enviar ao ESP32", bg="#ADD8E6", command=self.send_variables
+        ).pack(side="left", expand=True, fill="x", padx=2)
 
         # --- Estatísticas de rastreamento em tempo real ---
         stats_frame = tk.LabelFrame(side_frame, text="Status do Rastreamento")
@@ -350,7 +399,7 @@ class RescueTrackerApp:
             lbl.grid(row=i, column=1, sticky="w", padx=4, pady=2)
             self.stats_labels[key] = lbl
 
-        # ---- Linha 2: Monitor / Erros ----
+        # ---- Linha 2: Monitor / Erros (igual ao CONAN) ----
         bottom_frame = tk.Frame(self.root)
         bottom_frame.pack(fill="both", expand=False, padx=8, pady=(0, 8))
 
@@ -373,20 +422,12 @@ class RescueTrackerApp:
         entry.grid(row=row, column=1, sticky="nsew", padx=4, pady=2)
         setattr(self, attr, entry)
 
-    def _add_var_row(self):
-        row_idx = len(self.var_rows)
-        name_entry = tk.Entry(self.vars_table, width=12)
-        name_entry.insert(0, f"var{row_idx + 1}")
-        name_entry.grid(row=row_idx, column=0, padx=2, pady=1, sticky="we")
-
-        value_entry = tk.Entry(self.vars_table, width=12)
-        value_entry.insert(0, "0")
-        value_entry.grid(row=row_idx, column=1, padx=2, pady=1, sticky="we")
-
-        self.vars_table.grid_columnconfigure(0, weight=1)
-        self.vars_table.grid_columnconfigure(1, weight=1)
-
-        self.var_rows.append((name_entry, value_entry))
+    def _restore_pid_defaults(self):
+        """Repõe os valores padrão (os mesmos do firmware) em todos os campos PID."""
+        for chave, _rotulo, valor_padrao in PID_VARS:
+            entry = self.pid_entries[chave]
+            entry.delete(0, "end")
+            entry.insert(0, valor_padrao)
 
     # -------------------- LOG HELPERS --------------------
     def log(self, kind, msg):
@@ -427,7 +468,7 @@ class RescueTrackerApp:
         def load_and_start():
             self.worker = TrackerWorker(self.cam, self.get_esp_target, self.log)
             try:
-                self.worker.load_model("yolov8n.pt")
+                self.worker.load_model("python/yolov8n.pt")
             except Exception as e:
                 self.log("erro", f"Falha ao carregar modelo YOLO: {e}")
                 self.root.after(0, self._reset_connect_button)
@@ -469,27 +510,31 @@ class RescueTrackerApp:
 
     def send_variables(self):
         """
-        Placeholder para envio futuro de variáveis (ex.: Kp, Ki, Kd) ao ESP32.
-        Por enquanto apenas monta a mensagem e mostra no Monitor; quando você
-        definir o protocolo, troque o `self.log(...)` por um sock.sendto(...).
+        Monta o pacote 'CFG,kpx=...,kix=...,...' com as 10 variáveis de PID
+        e envia via UDP para o ESP32 (mesmo IP/porta usados pelo tracking).
+        O firmware reconhece esse pacote pelo prefixo 'CFG,' e atualiza as
+        variáveis correspondentes sem afetar o watchdog do tracking.
         """
         pares = []
-        for name_entry, value_entry in self.var_rows:
-            nome = name_entry.get().strip()
-            valor = value_entry.get().strip()
-            if nome:
-                pares.append(f"{nome}={valor}")
+        for chave, rotulo, _padrao in PID_VARS:
+            texto = self.pid_entries[chave].get().strip()
+            try:
+                valor = float(texto)
+            except ValueError:
+                self.log("erro", f"Valor inválido em {rotulo}: '{texto}' não é um número.")
+                return
+            pares.append(f"{chave}={valor}")
 
-        if not pares:
-            self.log("erro", "Nenhuma variável definida para enviar.")
+        payload = "CFG," + ",".join(pares)
+        ip, port = self.get_esp_target()
+
+        try:
+            self._cfg_sock.sendto(payload.encode(), (ip, port))
+        except OSError as e:
+            self.log("erro", f"Falha ao enviar configuração via UDP: {e}")
             return
 
-        payload = ";".join(pares)
-        ip, port = self.get_esp_target()
-        self.log("info", f"[PLACEHOLDER] Variáveis prontas para envio a {ip}:{port} -> {payload}")
-        # Quando o protocolo no ESP32 estiver definido, basta:
-        # sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # sock.sendto(payload.encode(), (ip, port))
+        self.log("info", f"Configuração PID enviada a {ip}:{port} -> {payload}")
 
     # -------------------- ATUALIZAÇÃO DA GUI (não bloqueante) --------------------
     def _schedule_gui_update(self):

@@ -3,16 +3,12 @@
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <ESP32Servo.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include "control_index.h"
 #include "motor_cmd.h"
 #include "env.h" // NOTE: criar seu próprio arquivo env.h se for usar o bot do Telegram, ou de substituir as variáveis botToken e chatId pelos seus valores reais.
 
 const char* ssid = "CLEUDO";
 const char* password = "91898487";
 
-AsyncWebServer server(80);
 WiFiUDP udp;
 const int udpPort = 4210;
 char incomingPacket[255];
@@ -31,6 +27,8 @@ const float AREA_SETPOINT = 40000;
 const float AREA_DEADBAND = 5000;
 
 // --- Parâmetros PID ---
+// Agora configuráveis em tempo real via pacote UDP "CFG,..." (ver parseConfigPacket).
+// Os valores abaixo são apenas os defaults usados até a primeira config chegar.
 volatile float KpX = 0.01;
 volatile float KiX = 0.000;
 volatile float KdX = 0.00;
@@ -57,7 +55,7 @@ const float AREA_PWM_MAX = 150; // mesmo limite que usa no constrain
 // --- Compensação do servo durante o giro da base ---
 // Quando a base gira, a câmera gira junto; este ganho move o servo no
 // sentido oposto para o alvo não "sair" da imagem durante o giro.
-// Ajustável via web para calibrar ao vivo (sem medida real de graus/s).
+// Ajustável via UDP para calibrar ao vivo (sem medida real de graus/s).
 volatile float GanhoCompensaServo = 0.05;
 
 float targetArea = 0;
@@ -82,6 +80,45 @@ void enviarTelegram(const char *ip) {
     http.end();
 }
 
+// ----------------------------------------------------------------------
+// Parser do pacote de configuração.
+// Formato esperado: "CFG,kpx=0.01,kix=0.0,kdx=0.0,kpy=0.02,kiy=0.0,
+//                     kdy=0.0,kparea=0.008,kiarea=0.0,kdarea=0.003,
+//                     gcompensa=0.05"
+// Não é obrigatório enviar todas as chaves — apenas as presentes no
+// pacote são atualizadas, as demais mantêm o valor atual.
+// ----------------------------------------------------------------------
+void parseConfigPacket(char *packet) {
+    // Pula o prefixo "CFG," antes de começar a tokenizar os pares.
+    char *cursor = packet + 4;
+    char *par = strtok(cursor, ",");
+
+    while (par != NULL) {
+        char *igual = strchr(par, '=');
+
+        if (igual != NULL) {
+            *igual = '\0';            // separa "chave" de "valor" no mesmo buffer
+            const char *chave = par;
+            float valor = atof(igual + 1);
+
+            if (strcmp(chave, "kpx") == 0) KpX = valor;
+            else if (strcmp(chave, "kix") == 0) KiX = valor;
+            else if (strcmp(chave, "kdx") == 0) KdX = valor;
+            else if (strcmp(chave, "kpy") == 0) KpY = valor;
+            else if (strcmp(chave, "kiy") == 0) KiY = valor;
+            else if (strcmp(chave, "kdy") == 0) KdY = valor;
+            else if (strcmp(chave, "kparea") == 0) KpArea = valor;
+            else if (strcmp(chave, "kiarea") == 0) KiArea = valor;
+            else if (strcmp(chave, "kdarea") == 0) KdArea = valor;
+            else if (strcmp(chave, "gcompensa") == 0) GanhoCompensaServo = valor;
+        }
+
+        par = strtok(NULL, ",");
+    }
+
+    Serial.println("Configuração PID atualizada via UDP.");
+}
+
 void setup() {
     Serial.begin(115200);
     pinMode(BLINK, OUTPUT);
@@ -99,47 +136,8 @@ void setup() {
     snprintf(ipStr, sizeof(ipStr), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
     enviarTelegram(ipStr);
 
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(200, "text/html", htmlPage());
-    });
-
-    server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
-        if(request->hasParam("kpx"))
-            KpX = request->getParam("kpx")->value().toFloat();
-
-        if(request->hasParam("kix"))
-            KiX = request->getParam("kix")->value().toFloat();
-
-        if(request->hasParam("kdx"))
-            KdX = request->getParam("kdx")->value().toFloat();
-
-        if(request->hasParam("kpy"))
-            KpY = request->getParam("kpy")->value().toFloat();
-
-        if(request->hasParam("kiy"))
-            KiY = request->getParam("kiy")->value().toFloat();
-
-        if(request->hasParam("kdy"))
-            KdY = request->getParam("kdy")->value().toFloat();
-
-        if(request->hasParam("kparea"))
-            KpArea = request->getParam("kparea")->value().toFloat();
-
-        if(request->hasParam("kiarea"))
-            KiArea = request->getParam("kiarea")->value().toFloat();
-
-        if(request->hasParam("kdarea"))
-            KdArea = request->getParam("kdarea")->value().toFloat();
-
-        if(request->hasParam("gcompensa"))
-            GanhoCompensaServo = request->getParam("gcompensa")->value().toFloat();
-
-        request->redirect("/");
-    });
-
     digitalWrite(BLINK, LOW);
 
-    server.begin();
     udp.begin(udpPort);
 
     configMotores();
@@ -163,12 +161,23 @@ void loop() {
     int packetSize = udp.parsePacket();
 
     if (packetSize) {
-        lastPacketTime = millis();
-        int len = udp.read(incomingPacket, 255);
-
+        int len = udp.read(incomingPacket, 254);
         if (len > 0) {
             incomingPacket[len] = 0;
+        } else {
+            return;
         }
+
+        // --- Pacote de configuração de PID (não atualiza lastPacketTime,
+        //     pois isso não é um pacote de tracking — não deve "alimentar"
+        //     o watchdog que mantém os motores ativos) ---
+        if (strncmp(incomingPacket, "CFG,", 4) == 0) {
+            parseConfigPacket(incomingPacket);
+            return;
+        }
+
+        // --- Pacote de tracking (formato original, sem mudanças) ---
+        lastPacketTime = millis();
 
         sscanf(incomingPacket, "%f,%f,%f,%d", &errorX, &errorY, &targetArea, &targetId);
         if (abs(errorX) < 15) errorX = 0;
