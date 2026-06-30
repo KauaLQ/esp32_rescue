@@ -23,20 +23,21 @@ float posX = 60;
 float posY = 60;
 const int SERVO_RIGHT_LIMIT = 170;
 const int SERVO_LEFT_LIMIT  = 10;
-const float AREA_SETPOINT = 40000;
-const float AREA_DEADBAND = 5000;
+const float AREA_SETPOINT = 150000;
+const float AREA_DEADBAND = 30000;
 
 // --- Parâmetros PID ---
 // Agora configuráveis em tempo real via pacote UDP "CFG,..." (ver parseConfigPacket).
 // Os valores abaixo são apenas os defaults usados até a primeira config chegar.
-volatile float KpX = 0.01;
+//TODO: ajustar melhor o proporcional, ainda está muito lento
+volatile float KpX = 0.005;
 volatile float KiX = 0.000;
 volatile float KdX = 0.00;
 float errorX = 0;
 float previousErrorX = 0;
 float integralX = 0;
 
-volatile float KpY = 0.02;
+volatile float KpY = 0.006;
 volatile float KiY = 0.000;
 volatile float KdY = 0.00;
 float errorY = 0;
@@ -45,9 +46,9 @@ float integralY = 0;
 
 // --- PID do eixo de área (avanço/recuo da base) ---
 // Kp pequeno porque o erro de área é em px² (pode ser milhares).
-volatile float KpArea = 0.008;
+volatile float KpArea = 0.006;
 volatile float KiArea = 0.0000;
-volatile float KdArea = 0.003;
+volatile float KdArea = 0.002;
 float previousAreaError = 0;
 float integralArea = 0;
 const float AREA_PWM_MAX = 150; // mesmo limite que usa no constrain

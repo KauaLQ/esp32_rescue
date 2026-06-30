@@ -241,6 +241,10 @@ class TrackerWorker:
                             target = max(persons, key=lambda p: p["area"])
                             self.tracked_id = target["id"]
 
+                #TODO:  Enviar erro normalizado para porcentagem  da imagem (mais robusta)
+                #       Em vez de calcular errorX, errorY e area em pixels absolutos
+                #       Dessa forma, independente da resolução que vem do ESP, não é necessário recalibrar o PID do controle
+
                 # --- Processamento do alvo e envio UDP ---
                 if target is not None:
                     x1, y1, x2, y2 = target["bbox"]
